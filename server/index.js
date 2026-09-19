@@ -93,14 +93,16 @@ app.delete('/api/files/:id', (req, res) => {
   }
 });
 
-// 扫一遍：可以只扫某一条规则、某一个文件，也可以只留某个级别
+// 扫一遍：范围可以按目录前缀、文件类型、具体规则与级别叠加挑选，命中条数还能设上限
 app.post('/api/scan', (req, res) => {
   try {
     const body = req.body && typeof req.body === 'object' ? req.body : {};
     res.json(api.scan({
-      level: body.level,
-      fileId: body.fileId,
-      ruleId: body.ruleId,
+      dirPrefix: body.dirPrefix,
+      fileType: body.fileType,
+      ruleIds: body.ruleIds,
+      levels: body.levels,
+      limit: body.limit,
     }));
   } catch (err) {
     sendError(res, err);

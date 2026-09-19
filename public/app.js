@@ -3,6 +3,8 @@
 const state = {
   rules: [],
   files: [],
+  allRules: [],
+  allFiles: [],
   levels: [],
   statuses: [],
   fileTypes: [],
@@ -12,6 +14,7 @@ const state = {
   editingRuleId: '',
   editingFileId: '',
   lastScan: null,
+  scanReady: false,
 };
 
 const el = (id) => document.getElementById(id);
@@ -127,7 +130,14 @@ async function loadRules() {
   state.fileTypes = payload.fileTypes || [];
   renderRuleFilters();
   renderRules();
-  renderScanRuleOptions();
+}
+
+// 扫描区的规则清单不走上面的筛选，始终拿全量，免得勾选项被规则区的筛选条件藏掉
+async function loadAllRules() {
+  const payload = await request('/api/rules');
+  state.allRules = payload.rules || [];
+  renderScanRulePicker();
+  updateScanPreview();
 }
 
 async function loadFiles() {
@@ -142,7 +152,15 @@ async function loadFiles() {
   state.ruleFileTypes = payload.fileTypes || [];
   renderFileFilters();
   renderFiles();
-  renderScanFileOptions();
+}
+
+// 扫描区算覆盖文件数时也要用全量文件，不受文件区筛选影响
+async function loadAllFiles() {
+  const payload = await request('/api/files');
+  state.allFiles = payload.files || [];
+  renderScanTypeOptions();
+  state.scanReady = true;
+  updateScanPreview();
 }
 
 function renderRuleFilters() {
@@ -179,11 +197,7 @@ function renderRuleFilters() {
   formType.innerHTML = state.fileTypes.map((item) => `<option value="${escapeHtml(item)}">${escapeHtml(item)}</option>`).join('');
   if (state.fileTypes.includes(formTypeCurrent)) formType.value = formTypeCurrent;
 
-  const scanLevel = el('scan-level');
-  const scanLevelCurrent = scanLevel.value;
-  scanLevel.innerHTML = '<option value="">全部级别</option>'
-    + state.levels.map((item) => `<option value="${escapeHtml(item)}">${escapeHtml(item)}</option>`).join('');
-  if (state.levels.includes(scanLevelCurrent)) scanLevel.value = scanLevelCurrent;
+  renderScanLevelChecks();
 }
 
 function renderFileFilters() {
@@ -194,20 +208,127 @@ function renderFileFilters() {
   if (state.ruleFileTypes.includes(current)) typeSelect.value = current;
 }
 
-function renderScanRuleOptions() {
-  const select = el('scan-rule');
-  const current = select.value;
-  select.innerHTML = '<option value="">全部规则</option>'
-    + state.rules.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.code)} ${escapeHtml(item.name)}</option>`).join('');
-  if (state.rules.some((item) => item.id === current)) select.value = current;
+// 级别复选框：重绘时保住已经勾上的级别
+function renderScanLevelChecks() {
+  const box = el('scan-levels');
+  const checked = new Set(Array.from(box.querySelectorAll('input[type="checkbox"]:checked')).map((node) => node.value));
+  box.innerHTML = state.levels.map((item) => `
+    <label class="check-item"><input type="checkbox" value="${escapeHtml(item)}" ${checked.has(item) ? 'checked' : ''}>${escapeHtml(item)}</label>
+  `).join('');
 }
 
-function renderScanFileOptions() {
-  const select = el('scan-file');
+function renderScanTypeOptions() {
+  const select = el('scan-type');
   const current = select.value;
-  select.innerHTML = '<option value="">全部文件</option>'
-    + state.files.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.path)}</option>`).join('');
-  if (state.files.some((item) => item.id === current)) select.value = current;
+  select.innerHTML = '<option value="">全部类型</option>'
+    + state.ruleFileTypes.map((item) => `<option value="${escapeHtml(item)}">${escapeHtml(item)}</option>`).join('');
+  if (state.ruleFileTypes.includes(current)) select.value = current;
+}
+
+// 规则勾选清单：停用的规则也列出来但标灰，勾了会明确提示它不参与
+function renderScanRulePicker() {
+  const box = el('scan-rule-list');
+  const checked = new Set(Array.from(box.querySelectorAll('input[type="checkbox"]:checked')).map((node) => node.value));
+  const sorted = state.allRules.slice().sort((a, b) => (a.code < b.code ? -1 : a.code > b.code ? 1 : 0));
+  box.innerHTML = sorted.map((item) => {
+    const disabled = item.status !== '启用';
+    return `<label class="rule-pick ${disabled ? 'is-off' : ''}" title="${disabled ? '停用规则不参与比对' : ''}">
+      <input type="checkbox" value="${escapeHtml(item.id)}" ${checked.has(item.id) ? 'checked' : ''}>
+      <span class="mono">${escapeHtml(item.code)}</span>
+      <span class="tag ${levelClass(item.level)}">${escapeHtml(item.level)}</span>
+      <span>${escapeHtml(item.name)}</span>
+      <span class="pick-status">${disabled ? '停用' : escapeHtml(item.fileType)}</span>
+    </label>`;
+  }).join('');
+}
+
+// 目录前缀的口径跟服务端一致：等于这个目录或落在它下面才算覆盖到
+function normalizePrefixInput() {
+  return el('scan-prefix').value.trim().replace(/\/+$/, '');
+}
+
+function pathMatchesPrefixLocally(filePath, prefix) {
+  if (!prefix) return true;
+  return filePath === prefix || filePath.startsWith(`${prefix}/`);
+}
+
+function checkedValues(containerId) {
+  return Array.from(el(containerId).querySelectorAll('input[type="checkbox"]:checked')).map((node) => node.value);
+}
+
+// 扫之前就算清楚：这一轮用几条启用规则、覆盖几个文件、有没有被条件挑空
+function evaluateScope() {
+  const prefix = normalizePrefixInput();
+  const fileType = el('scan-type').value;
+  const levelPicks = checkedValues('scan-levels');
+  const rulePicks = checkedValues('scan-rule-list');
+
+  const files = state.allFiles
+    .filter((item) => pathMatchesPrefixLocally(item.path, prefix))
+    .filter((item) => !fileType || item.type === fileType);
+
+  const enabled = state.allRules.filter((item) => item.status === '启用');
+  const selected = enabled.filter((item) => rulePicks.length === 0 || rulePicks.includes(item.id));
+  const used = levelPicks.length === 0
+    ? selected
+    : selected.filter((item) => levelPicks.includes(item.level));
+
+  const inactivePicked = state.allRules.filter((item) => rulePicks.includes(item.id) && item.status !== '启用');
+
+  return { prefix, fileType, levelPicks, rulePicks, files, enabled, used, inactivePicked };
+}
+
+function updateScanPreview() {
+  const box = el('scan-preview');
+  if (!box) return;
+  if (!state.scanReady) return;
+  const scope = evaluateScope();
+  const limitText = readLimitText();
+  const parts = [];
+
+  if (scope.files.length === 0) {
+    const conds = [];
+    if (scope.prefix) conds.push(`目录前缀「${scope.prefix}」`);
+    if (scope.fileType) conds.push(`文件类型「${scope.fileType}」`);
+    parts.push(conds.length
+      ? `按${conds.join('加上')}挑下来覆盖 0 个文件（共 ${state.allFiles.length} 个），扫之前先换个范围`
+      : `文件清单里一个文件都没有（当前 0 个），先去文件区收录文件`);
+  }
+  if (scope.used.length === 0) {
+    if (scope.rulePicks.length > 0 && scope.inactivePicked.length > 0) {
+      parts.push(`勾选的规则全是停用状态，这一轮没有规则参与比对`);
+    } else if (scope.enabled.length === 0) {
+      parts.push(`当前没有启用的规则，先去规则区启用至少一条`);
+    } else if (scope.levelPicks.length > 0) {
+      parts.push(`启用规则里没有级别为 ${scope.levelPicks.join('、')} 的，这一轮用 0 条规则`);
+    } else {
+      parts.push(`这一轮没有可参与的启用规则`);
+    }
+  }
+  if (parts.length === 0) {
+    parts.push(`这一轮将使用 ${scope.used.length} 条规则，覆盖 ${scope.files.length} 个文件`);
+  }
+  if (scope.inactivePicked.length > 0 && scope.used.length > 0) {
+    parts.push(`另有 ${scope.inactivePicked.length} 条勾选的停用规则不参与`);
+  }
+  if (!limitText.ok) {
+    parts.push(limitText.message);
+  } else if (limitText.value !== null) {
+    parts.push(`命中清单最多保留前 ${limitText.value} 条`);
+  }
+
+  box.textContent = parts.join('；');
+  box.classList.toggle('preview-warn', scope.files.length === 0 || scope.used.length === 0 || !limitText.ok);
+}
+
+// 上限只在发请求时严格拦：0、负数、小数、非整数文本一律不让扫
+function readLimitText() {
+  const raw = el('scan-limit').value.trim();
+  if (!raw) return { ok: true, value: null };
+  if (!/^\d+$/.test(raw)) return { ok: false, message: '命中条数上限只能填正整数；不需要限制就留空' };
+  const num = Number(raw);
+  if (num < 1) return { ok: false, message: '命中条数上限必须大于 0，填 0 或负数等于一条都不留；不需要限制就留空' };
+  return { ok: true, value: num };
 }
 
 function renderRules() {
@@ -318,6 +439,7 @@ async function submitRule(event) {
     }
     closeRuleForm();
     await loadRules();
+    await loadAllRules();
   } catch (err) {
     notify(err.message, 'error');
     markField(err.field);
@@ -344,40 +466,82 @@ async function submitFile(event) {
     }
     closeFileForm();
     await loadFiles();
+    await loadAllFiles();
   } catch (err) {
     notify(err.message, 'error');
     markField(err.field);
   }
 }
 
-// 扫一遍，把概要与命中清单都画出来
+// 扫一遍：范围为空、上限不合法当场拦住；扫完把概要、截断说明与命中清单都画出来
 async function runScan() {
   clearNotice();
+  clearFieldMarks();
+
+  const limit = readLimitText();
+  if (!limit.ok) {
+    notify(limit.message, 'error');
+    markField('limit');
+    return;
+  }
+
+  const scope = evaluateScope();
+  if (scope.files.length === 0 || scope.used.length === 0) {
+    notify(scope.files.length === 0
+      ? '当前范围一个文件都覆盖不到，先把目录前缀或文件类型放宽再扫'
+      : '当前范围一条参与比对的规则都没有，勾至少一条规则或放宽级别', 'error');
+    return;
+  }
+
   const body = {
-    ruleId: el('scan-rule').value,
-    fileId: el('scan-file').value,
-    level: el('scan-level').value,
+    dirPrefix: scope.prefix,
+    fileType: scope.fileType,
+    levels: scope.levelPicks,
+    ruleIds: scope.rulePicks,
   };
+  if (limit.value !== null) body.limit = limit.value;
+
   try {
     const result = await request('/api/scan', { method: 'POST', body: JSON.stringify(body) });
     state.lastScan = result;
     renderScan(result);
   } catch (err) {
     notify(err.message, 'error');
+    markField(err.field);
   }
 }
 
 function renderScan(result) {
-  el('scan-meta').textContent = `扫描时刻 ${formatTime(result.scannedAt)}　参与比对的规则 ${result.rulesUsed} 条（启用共 ${result.enabledRules} 条）　范围里的文件 ${result.filesInScope} 个（清单共 ${result.filesTotal} 个）`;
+  const scopeParts = [];
+  if (result.scope.dirPrefix) scopeParts.push(`目录前缀「${result.scope.dirPrefix}」`);
+  if (result.scope.fileType) scopeParts.push(`文件类型「${result.scope.fileType}」`);
+  if (result.scope.levels.length) scopeParts.push(`级别「${result.scope.levels.join('、')}」`);
+  if (result.scope.ruleIds.length) scopeParts.push(`指定规则 ${result.scope.ruleIds.length} 条`);
+  const scopeText = scopeParts.length ? `范围：${scopeParts.join('，')}` : '范围：全部规则、全部文件';
+  el('scan-meta').textContent = `扫描时刻 ${formatTime(result.scannedAt)}　${scopeText}　参与比对的规则 ${result.rulesUsed} 条（启用共 ${result.enabledRules} 条）　覆盖文件 ${result.filesInScope} 个（清单共 ${result.filesTotal} 个）`;
 
   const warningBox = el('scan-warning');
-  if (result.warning) {
-    warningBox.textContent = result.warning;
+  if (result.inactiveNote) {
+    warningBox.textContent = result.inactiveNote;
     warningBox.classList.remove('hidden');
   } else {
     warningBox.classList.add('hidden');
     warningBox.textContent = '';
   }
+
+  // 范围一个文件都覆盖不到、或一条规则都没选出来时：只给说明，不摆一份空清单
+  if (result.notice) {
+    el('scan-summary').classList.add('hidden');
+    el('scan-summary').innerHTML = '';
+    el('hit-table-wrap').classList.add('hidden');
+    el('hit-empty').classList.add('hidden');
+    const extra = result.rulesUsed > 0 && result.inactiveNote ? `（${result.inactiveNote}）` : '';
+    warningBox.textContent = `${result.notice}${extra}`;
+    warningBox.classList.remove('hidden');
+    return;
+  }
+
+  el('hit-table-wrap').classList.remove('hidden');
 
   const summaryBox = el('scan-summary');
   const levelText = Object.keys(result.summary.byLevel)
@@ -389,8 +553,15 @@ function renderScan(result) {
   const fileText = result.summary.byFile
     .map((item) => `${item.path} ${item.count} 条`)
     .join('　') || '没有文件命中';
+
+  // 超上限时把总数、清单里的条数、截掉多少都摆明，不能让人误以为只有清单里这些
+  const truncLine = result.summary.truncated
+    ? `<div class="summary-line trunc-line">命中超过上限：一共命中 <strong>${result.summary.total}</strong> 条，清单只保留按规则编码、路径、行号排序后的前 <strong>${result.summary.returned}</strong> 条，截掉 ${result.summary.omitted} 条；放宽上限或缩小范围可以看全</div>`
+    : '';
+
   summaryBox.innerHTML = `
     <div class="summary-line"><strong>一共命中 ${result.summary.total} 条</strong>　${escapeHtml(levelText)}</div>
+    ${truncLine}
     <div class="summary-line">按规则：${escapeHtml(ruleText)}</div>
     <div class="summary-line">按文件：${escapeHtml(fileText)}</div>`;
   summaryBox.classList.remove('hidden');
@@ -405,6 +576,18 @@ function renderScan(result) {
       <td class="mono line-cell">${escapeHtml(hit.lineText)}</td>
     </tr>`).join('');
   el('hit-empty').classList.toggle('hidden', result.hits.length > 0);
+}
+
+// 清空扫描范围：条件与上一轮结果都回到初始样子
+function resetScanScope() {
+  el('scan-prefix').value = '';
+  el('scan-type').value = '';
+  el('scan-limit').value = '';
+  el('scan-rule-list').querySelectorAll('input[type="checkbox"]').forEach((node) => { node.checked = false; });
+  el('scan-levels').querySelectorAll('input[type="checkbox"]').forEach((node) => { node.checked = false; });
+  clearNotice();
+  clearFieldMarks();
+  updateScanPreview();
 }
 
 // 列表上的操作用事件委托统一处理，列表重绘之后不需要重新绑定
@@ -428,6 +611,7 @@ document.addEventListener('click', async (event) => {
       if (state.editingRuleId === node.dataset.ruleDelete) closeRuleForm();
       notify('规则已删除', 'ok');
       await loadRules();
+      await loadAllRules();
     } catch (err) {
       notify(err.message, 'error');
     }
@@ -460,6 +644,7 @@ document.addEventListener('click', async (event) => {
       el('file-preview').classList.add('hidden');
       notify('文件已移出清单', 'ok');
       await loadFiles();
+      await loadAllFiles();
     } catch (err) {
       notify(err.message, 'error');
     }
@@ -492,7 +677,9 @@ el('rule-filter-reset').addEventListener('click', () => {
 el('rule-refresh').addEventListener('click', () => {
   clearNotice();
   loadRules()
+    .then(loadAllRules)
     .then(loadFiles)
+    .then(loadAllFiles)
     .catch((err) => notify(err.message, 'error'));
 });
 el('file-filter-apply').addEventListener('click', () => {
@@ -505,6 +692,23 @@ el('file-filter-reset').addEventListener('click', () => {
   loadFiles().catch((err) => notify(err.message, 'error'));
 });
 el('scan-run').addEventListener('click', runScan);
+el('scan-reset').addEventListener('click', resetScanScope);
+el('scan-prefix').addEventListener('input', updateScanPreview);
+el('scan-type').addEventListener('change', updateScanPreview);
+el('scan-limit').addEventListener('input', updateScanPreview);
+el('scan-levels').addEventListener('change', updateScanPreview);
+el('scan-rule-list').addEventListener('change', updateScanPreview);
+el('scan-rules-enabled').addEventListener('click', () => {
+  el('scan-rule-list').querySelectorAll('input[type="checkbox"]').forEach((node) => {
+    const rule = state.allRules.find((item) => item.id === node.value);
+    node.checked = Boolean(rule && rule.status === '启用');
+  });
+  updateScanPreview();
+});
+el('scan-rules-none').addEventListener('click', () => {
+  el('scan-rule-list').querySelectorAll('input[type="checkbox"]').forEach((node) => { node.checked = false; });
+  updateScanPreview();
+});
 el('rule-filter-level').addEventListener('change', () => {
   loadRules().catch((err) => notify(err.message, 'error'));
 });
@@ -515,9 +719,11 @@ el('operator').addEventListener('change', () => {
   window.localStorage.setItem(OPERATOR_KEY, currentOperator());
 });
 
-// 页面打开时先把规则与文件都拉一遍，扫描的范围下拉依赖这两份清单
+// 页面打开时先把规则与文件都拉一遍（筛选清单与全量清单各一份），扫描范围依赖全量那两份
 restoreOperator();
 loadHealth();
 loadRules()
+  .then(loadAllRules)
   .then(loadFiles)
+  .then(loadAllFiles)
   .catch((err) => notify(err.message, 'error'));

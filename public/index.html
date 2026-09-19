@@ -129,17 +129,41 @@
     <section class="panel">
       <div class="panel-head">
         <h2>命中清单</h2>
-        <div class="filters">
-          <select id="scan-rule"><option value="">全部规则</option></select>
-          <select id="scan-file"><option value="">全部文件</option></select>
-          <select id="scan-level"><option value="">全部级别</option></select>
-          <button type="button" id="scan-run">按规则扫一遍</button>
+      </div>
+      <div class="scan-controls">
+        <div class="scan-row">
+          <label class="scan-field" data-field="dirPrefix">目录前缀
+            <input id="scan-prefix" placeholder="留空扫全部，例如 src/server" maxlength="120">
+          </label>
+          <label class="scan-field" data-field="fileType">文件类型
+            <select id="scan-type"><option value="">全部类型</option></select>
+          </label>
+          <div class="scan-field" data-field="levels">
+            <span class="field-caption">级别（不勾等于全部级别，可多选）</span>
+            <div class="check-row" id="scan-levels"></div>
+          </div>
+          <label class="scan-field limit-field" data-field="limit">命中条数上限
+            <input id="scan-limit" placeholder="留空不限制" inputmode="numeric" maxlength="9">
+          </label>
+        </div>
+        <div class="picker" data-field="ruleIds">
+          <div class="picker-head">
+            <span>参与规则（不勾等于全部启用规则，可多选）</span>
+            <button type="button" class="link" id="scan-rules-enabled">只选全部启用</button>
+            <button type="button" class="link" id="scan-rules-none">全部不选</button>
+          </div>
+          <div class="picker-body" id="scan-rule-list"></div>
+        </div>
+        <div class="scan-actions">
+          <button type="button" id="scan-run">按选定范围扫一遍</button>
+          <button type="button" id="scan-reset" class="ghost">清空范围</button>
+          <span class="scan-preview" id="scan-preview">范围说明将在扫之前显示在这里</span>
         </div>
       </div>
-      <p class="scan-meta" id="scan-meta">还没有扫过，点右上角扫一遍</p>
+      <p class="scan-meta" id="scan-meta">还没有扫过，先在上面挑好范围，再点扫一遍</p>
       <p class="scan-warning hidden" id="scan-warning"></p>
       <div class="summary hidden" id="scan-summary"></div>
-      <div class="table-wrap">
+      <div class="table-wrap" id="hit-table-wrap">
         <table class="grid">
           <thead>
             <tr>
@@ -154,7 +178,7 @@
           <tbody id="hit-body"></tbody>
         </table>
       </div>
-      <p class="empty-tip hidden" id="hit-empty">这一轮没有命中</p>
+      <p class="empty-tip hidden" id="hit-empty">这一轮范围有效，但一条命中都没有</p>
     </section>
   </main>
 
