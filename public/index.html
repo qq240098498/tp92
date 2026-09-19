@@ -129,15 +129,40 @@
     <section class="panel">
       <div class="panel-head">
         <h2>命中清单</h2>
-        <div class="filters">
-          <select id="scan-rule"><option value="">全部规则</option></select>
-          <select id="scan-file"><option value="">全部文件</option></select>
-          <select id="scan-level"><option value="">全部级别</option></select>
-          <button type="button" id="scan-run">按规则扫一遍</button>
-        </div>
       </div>
-      <p class="scan-meta" id="scan-meta">还没有扫过，点右上角扫一遍</p>
-      <p class="scan-warning hidden" id="scan-warning"></p>
+      <div class="scan-scope">
+        <div class="scope-row">
+          <label class="scope-field" data-field="scanDirPrefix">目录前缀
+            <input id="scan-dir-prefix" list="scan-dir-list" placeholder="留空扫全部，例如 src/server" maxlength="120">
+            <datalist id="scan-dir-list"></datalist>
+          </label>
+          <label class="scope-field" data-field="scanFileType">文件类型
+            <select id="scan-file-type"><option value="">全部类型</option></select>
+          </label>
+          <label class="scope-field" data-field="scanLimit">命中条数上限
+            <input id="scan-limit" type="text" inputmode="numeric" placeholder="留空不限" maxlength="9">
+          </label>
+          <button type="button" id="scan-run">按范围扫一遍</button>
+        </div>
+        <div class="scope-row">
+          <span class="scope-caption">级别（可多选，不勾为全部）</span>
+          <div class="chip-row" id="scan-level-picks" data-field="scanLevels"></div>
+        </div>
+        <div class="scope-row scope-rules-head">
+          <span class="scope-caption">参与规则（可多选，不勾为全部启用规则）</span>
+          <span class="scope-actions">
+            <button type="button" class="ghost" id="scan-rules-enabled">只选启用</button>
+            <button type="button" class="ghost" id="scan-rules-all">全选</button>
+            <button type="button" class="ghost" id="scan-rules-none">清空</button>
+          </span>
+        </div>
+        <div class="rule-picks" id="scan-rule-picks" data-field="scanRules"></div>
+        <p class="scan-preview" id="scan-preview">选好范围后，这里会先写明这一轮用到几条规则、覆盖几个文件</p>
+      </div>
+      <p class="scan-meta" id="scan-meta">还没有扫过，点上面的“按范围扫一遍”</p>
+      <div class="scan-notes hidden" id="scan-notes"></div>
+      <p class="scan-empty hidden" id="scan-empty"></p>
+      <p class="scan-truncated hidden" id="scan-truncated"></p>
       <div class="summary hidden" id="scan-summary"></div>
       <div class="table-wrap">
         <table class="grid">
